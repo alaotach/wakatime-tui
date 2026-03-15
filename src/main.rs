@@ -26,8 +26,18 @@ fn format_items(title: &str, items: &[crate::api::wakatime::Item]) -> String {
     out.push_str(title);
     out.push(':');
 
-    for item in items {
-        out.push_str(&format!("\n  - {} ({})", item.name, item.text));
+    let max_w = 24;
+
+    for item in items.iter().take(8) {
+        let bars = ((item.percent / 100.0) * max_w as f64).round() as usize;
+        let bar = "█".repeat(bars);
+        out.push_str(&format!(
+            "\n  {:<12} {:<width$} {:>5.1}%",
+            item.name,
+            bar,
+            item.percent,
+            width = max_w
+        ));
     }
 
     out
