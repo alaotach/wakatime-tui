@@ -5,8 +5,9 @@ edition = "2024"
 default-run = "WakaTime-TUI"
 
 [dependencies]
-chrono = "0.4.44"
+chrono = { version = "0.4.44", features = ["serde"] }
 crossterm = "0.29.0"
+dirs = "6.0.0"
 ratatui = "0.30.0"
 reqwest = { version = "0.13.2", features = ["json", "blocking"] }
 serde = { version = "1.0.228", features = ["derive"] }

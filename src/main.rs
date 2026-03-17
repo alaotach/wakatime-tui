@@ -12,14 +12,16 @@ use ratatui::{
     widgets::{Block, Borders, Gauge, Paragraph, Wrap},
     Frame, Terminal,
 };
-use std::time::Duration;
+use std::time::Duration as StdDuration;
 use crate::config::Config;
 mod config;
 mod api;
-use crate::api::wakatime::{fetch_summary, fetch_weekly_stats, Item};
+use crate::api::wakatime::{fetch_summary, fetch_weekly_stats, fetch_spans, Item};
+use std::collections::BTreeMap;
+use chrono::{NaiveDate, Local, Datelike, Duration};
 
-const HMAPR: usize = 7;
-const HMAPC: usize = 28;
+const HMAPR: usize = 9;
+const HMAPC: usize = 40;
 
 fn main() -> Result<(), io::Error> {
     let config = Config::from_env();
@@ -62,7 +64,8 @@ fn main() -> Result<(), io::Error> {
         (today_text, weekly_header, languages, projects)
     };
 
-    // let heatmap = build_hmap(&languages, &projects);
+    let activity = runtime.block_on(fetch_spans(&config)).unwrap_or_default();
+    let heatmap = build_hmap(activity);
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -77,7 +80,7 @@ fn main() -> Result<(), io::Error> {
                     Constraint::Length(3),
                     Constraint::Length(3),
                     Constraint::Length(9),
-                    Constraint::Length(15),
+                    Constraint::Length(22),
                     Constraint::Min(0),
                 ]).split(size);
             let header = Paragraph::new("WakaTime TUI - Press q to quit")
@@ -103,12 +106,12 @@ fn main() -> Result<(), io::Error> {
             f.render_widget(weekly, weekly_layout[0]);
             rdr_gg(f, weekly_layout[1], &languages, Color::Green);
             rdr_gg(f, weekly_layout[2], &projects, Color::Cyan);
-            // let hmap_widget = Paragraph::new(rdr_hmap(&heatmap)).block(Block::default().borders(Borders::ALL).title("Coding Streak"));
+            let hmap_widget = Paragraph::new(rdr_hmap(&heatmap)).block(Block::default().borders(Borders::ALL).title("Coding Streak"));
 
-            // f.render_widget(hmap_widget, chunks[3]);
+            f.render_widget(hmap_widget, chunks[3]);
         })?;
 
-        if event::poll(Duration::from_millis(100))? {
+        if event::poll(StdDuration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if key.code == KeyCode::Char('q') {
                     break;
@@ -152,34 +155,31 @@ fn heat_color(level: u8) -> Color {
     }
 }
 
-// fn build_hmap(activity) -> Vec<Vec<u8>> {
-//     let mut grid = vec![vec![0u8; HMAPR]; HMAPC];
-//     let values: Vec<u8> = activity
-//         .iter()
-//         .chain(projects.iter())
-//         .map(|item| {
-//             let pct = item.percent.clamp(0.0, 100.0);
-//             match pct {
-//                 p if p <= 0.0 => 0,
-//                 p if p <= 25.0 => 1,
-//                 p if p <= 50.0 => 2,
-//                 p if p <= 75.0 => 3,
-//                 _ => 4,
-//             }
-//         })
-//         .collect();
-//     if values.is_empty() {
-//         return grid;
-//     }
-//     for col in 0..HMAPC {
-//         let level = values[col % values.len()];
-//         for row in 0..HMAPR {
-//             let wave = ((col + row) % 5) as u8;
-//             grid[col][row] = level.saturating_sub(wave / 3);
-//         }
-//     }
-//     grid
-// }
+fn build_hmap(activity: BTreeMap<NaiveDate, f64>) -> Vec<Vec<u8>> {
+    let mut grid = vec![vec![0u8; HMAPR]; HMAPC];
+    let today = Local::now().date_naive();
+    for i in 0..HMAPC {
+        for j in 0..HMAPR {
+            let idx = i * HMAPR + j;
+            let days_ago = (HMAPC * HMAPR - 1) - idx;
+            let day = today - Duration::days(days_ago as i64);
+            let secs = activity.get(&day).cloned().unwrap_or(0.0);
+            let level = if secs == 0.0 {
+                0
+            } else {
+                let hrs = secs / 3600.0;
+                match hrs {
+                    h if h < 0.25 => 1,
+                    h if h < 1.0  => 2,
+                    h if h < 3.0  => 3,
+                    _             => 4,
+                }
+            };
+            grid[i][j] = level;
+        }
+    }
+    grid
+}
 
 fn rdr_hmap(grid: &[Vec<u8>]) -> Vec<Line<'static>> {
     let mut lines = Vec::with_capacity(HMAPR);
