@@ -50,6 +50,7 @@ fn main() -> Result<(), io::Error> {
     let mut lb_period = LbType::Daily;
 
     let config = Config::from_env();
+    let api_missing = config.api_key.is_empty();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -154,45 +155,81 @@ fn main() -> Result<(), io::Error> {
 
             match view {
                 View::Main => {
-                    let chunks = Layout::default()
-                        .direction(Direction::Vertical)
-                        .margin(1)
-                        .constraints([
-                            Constraint::Length(3),
-                            Constraint::Length(3),
-                            Constraint::Length(9),
-                            Constraint::Length(22),
-                            Constraint::Min(0),
-                        ])
-                        .split(size);
+                    if api_missing {
+                        let chunks = Layout::default()
+                            .direction(Direction::Vertical)
+                            .margin(1)
+                            .constraints([Constraint::Length(3), Constraint::Min(0)])
+                            .split(size);
+                        
+                        let header = Paragraph::new("WakaTime TUI - Setup Required  [q] Quit")
+                            .block(Block::default().borders(Borders::ALL).title("Header"));
+                        f.render_widget(header, chunks[0]);
 
-                    let header = Paragraph::new("WakaTime TUI - [p] Projects  [l] Leaderboard  [d] Day  [r] Refresh  [q] Quit")
-                        .block(Block::default().borders(Borders::ALL).title("Header"));
-                    f.render_widget(header, chunks[0]);
+                        let setup_text = [
+                            "Hackatime is not configured yet. Set up your API key, then restart this TUI.",
+                            "",
+                            "Windows PowerShell install:",
+                            "& ([scriptblock]::Create((irm https://hack.club/setup/install.ps1))) -ApiKey <YOUR_API_KEY>",
+                            "",
+                            "macOS/Linux install:",
+                            "curl -fsSL https://hack.club/setup/install.sh | bash -s -- <YOUR_API_KEY>",
+                            "",
+                            "Or create ~/.wakatime.cfg (Windows: %USERPROFILE%\\.wakatime.cfg):",
+                            "[settings]",
+                            "api_url = https://hackatime.hackclub.com/api/hackatime/v1",
+                            "api_key = <YOUR_API_KEY>",
+                            "heartbeat_rate_limit_seconds = 30",
+                            "",
+                            "You can also export HACKATIME_API_KEY in your environment.",
+                        ]
+                        .join("\n");
 
-                    let today = Paragraph::new(today_text.as_str())
-                        .block(Block::default().borders(Borders::ALL).title("Today"));
-                    f.render_widget(today, chunks[1]);
+                        let setup = Paragraph::new(setup_text)
+                            .block(Block::default().borders(Borders::ALL).title("Hackatime Setup"))
+                            .wrap(Wrap { trim: false });
+                        f.render_widget(setup, chunks[1]);
+                    } else {
+                        let chunks = Layout::default()
+                            .direction(Direction::Vertical)
+                            .margin(1)
+                            .constraints([
+                                Constraint::Length(3),
+                                Constraint::Length(3),
+                                Constraint::Length(9),
+                                Constraint::Length(22),
+                                Constraint::Min(0),
+                            ])
+                            .split(size);
 
-                    let weekly_block = Block::default().borders(Borders::ALL).title("This Week");
-                    let weekly_inner = weekly_block.inner(chunks[2]);
-                    f.render_widget(weekly_block, chunks[2]);
-                    let weekly_layout = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([
-                            Constraint::Length(1),
-                            Constraint::Length(3),
-                            Constraint::Length(3),
-                        ])
-                        .split(weekly_inner);
-                    let weekly = Paragraph::new(weekly_header.as_str()).wrap(Wrap { trim: true });
-                    f.render_widget(weekly, weekly_layout[0]);
-                    rdr_gg(f, weekly_layout[1], &languages, Color::Green);
-                    rdr_gg(f, weekly_layout[2], &projects, Color::Cyan);
+                        let header = Paragraph::new("WakaTime TUI - [p] Projects  [l] Leaderboard  [d] Day  [r] Refresh  [q] Quit")
+                            .block(Block::default().borders(Borders::ALL).title("Header"));
+                        f.render_widget(header, chunks[0]);
 
-                    let hmap_widget = Paragraph::new(rdr_hmap(&heatmap))
-                        .block(Block::default().borders(Borders::ALL).title(format!("Coding Streak (Current: {}d, Longest: {}d)", current_streak, longest_streak)));
-                    f.render_widget(hmap_widget, chunks[3]);
+                        let today = Paragraph::new(today_text.as_str())
+                            .block(Block::default().borders(Borders::ALL).title("Today"));
+                        f.render_widget(today, chunks[1]);
+
+                        let weekly_block = Block::default().borders(Borders::ALL).title("This Week");
+                        let weekly_inner = weekly_block.inner(chunks[2]);
+                        f.render_widget(weekly_block, chunks[2]);
+                        let weekly_layout = Layout::default()
+                            .direction(Direction::Vertical)
+                            .constraints([
+                                Constraint::Length(1),
+                                Constraint::Length(3),
+                                Constraint::Length(3),
+                            ])
+                            .split(weekly_inner);
+                        let weekly = Paragraph::new(weekly_header.as_str()).wrap(Wrap { trim: true });
+                        f.render_widget(weekly, weekly_layout[0]);
+                        rdr_gg(f, weekly_layout[1], &languages, Color::Green);
+                        rdr_gg(f, weekly_layout[2], &projects, Color::Cyan);
+
+                        let hmap_widget = Paragraph::new(rdr_hmap(&heatmap))
+                            .block(Block::default().borders(Borders::ALL).title(format!("Coding Streak (Current: {}d, Longest: {}d)", current_streak, longest_streak)));
+                        f.render_widget(hmap_widget, chunks[3]);
+                    }
                 }
 
                 View::Projects => {

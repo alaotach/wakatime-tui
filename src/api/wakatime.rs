@@ -74,7 +74,6 @@ pub struct WeeklyData {
 #[derive(Debug, Deserialize, Default)]
 pub struct Item {
     pub name: String,
-    pub text: String,
     pub percent: f64,
 }
 
@@ -83,7 +82,6 @@ pub struct ProjectDetail {
     pub name: String,
     pub total_seconds: u64,
     pub total_heartbeats: u64,
-    pub archived: bool,
     #[serde(default)]
     pub languages: Vec<String>,
 }
