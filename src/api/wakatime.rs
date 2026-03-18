@@ -216,7 +216,6 @@ pub async fn fetch_projects(config: &Config) -> Result<Vec<ProjectDetail>, Strin
 
 pub async fn fetch_daily_leaderboard(config: &Config) -> Result<Vec<(String, String)>, String> {
     let client = Client::new();
-    let base = config.api_url.trim_end_matches('/');
     let endpoint = "https://hackatime.hackclub.com/api/v1/leaderboard/daily".to_string();
     let resp = client.get(&endpoint).bearer_auth(&config.api_key).send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
@@ -230,7 +229,6 @@ pub async fn fetch_daily_leaderboard(config: &Config) -> Result<Vec<(String, Str
 
 pub async fn fetch_weekly_leaderboard(config: &Config) -> Result<Vec<(String, String)>, String> {
     let client = Client::new();
-    let base = config.api_url.trim_end_matches('/');
     let endpoint = "https://hackatime.hackclub.com/api/v1/leaderboard/weekly".to_string();
     let resp = client.get(&endpoint).bearer_auth(&config.api_key).send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
@@ -240,4 +238,47 @@ pub async fn fetch_weekly_leaderboard(config: &Config) -> Result<Vec<(String, St
         let secs = entry.get("total_seconds").and_then(|s| s.as_u64()).unwrap_or(0);
         (username, format!("{}h {}m {}s", secs / 3600, (secs % 3600) / 60, secs % 60))
     }).collect())
+}
+
+pub fn streaks(activity: &BTreeMap<NaiveDate, f64>) -> (u64, u64) {
+    let today = Local::now().date_naive();
+    let min = 60.0;
+    let mut days: Vec<NaiveDate> = activity
+        .iter()
+        .filter(|(_, v)| **v >= min)
+        .map(|(d, _)| *d)
+        .collect();
+    days.sort();
+    if days.is_empty() {
+        return (0, 0);
+    }
+    let mut current = 0u32;
+    let mut check = if activity.get(&today).copied().unwrap_or(0.0) >= min {
+        today
+    } else {
+        today - chrono::Duration::days(1)
+    };
+    loop {
+        if activity.get(&check).copied().unwrap_or(0.0) >= min {
+            current += 1;
+            check -= chrono::Duration::days(1);
+        } else {
+            break;
+        }
+    }
+    let mut longest = 0u32;
+    let mut run = 1u32;
+    for i in 1..days.len() {
+        let diff = (days[i] - days[i-1]).num_days();
+        if diff == 1 {
+            run += 1;
+            if run > longest {
+                longest = run;
+            }
+        } else {
+            run = 1;
+        }
+    }
+    longest = longest.max(run);
+    (current as u64, longest as u64)
 }

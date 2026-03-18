@@ -19,7 +19,7 @@ use ratatui::{
 
 use crate::api::wakatime::{
     fetch_daily_leaderboard, fetch_projects, fetch_spans, fetch_summary, fetch_weekly_leaderboard,
-    fetch_weekly_stats, Item, ProjectDetail as ProjectItem,
+    fetch_weekly_stats, streaks, Item, ProjectDetail as ProjectItem,
 };
 use crate::config::Config;
 
@@ -111,7 +111,8 @@ fn main() -> Result<(), io::Error> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let activity = runtime.block_on(fetch_spans(&config)).unwrap_or_default();
-    let heatmap = build_hmap(activity);
+    let heatmap = build_hmap(&activity);
+    let (current_streak, longest_streak) = streaks(&activity);
     let mut search_q = String::new();
     let mut search_active = false;
     let mut lb_search_q = String::new();
@@ -160,7 +161,7 @@ fn main() -> Result<(), io::Error> {
                     rdr_gg(f, weekly_layout[2], &projects, Color::Cyan);
 
                     let hmap_widget = Paragraph::new(rdr_hmap(&heatmap))
-                        .block(Block::default().borders(Borders::ALL).title("Coding Streak"));
+                        .block(Block::default().borders(Borders::ALL).title(format!("Coding Streak (Current: {}d, Longest: {}d)", current_streak, longest_streak)));
                     f.render_widget(hmap_widget, chunks[3]);
                 }
 
@@ -536,7 +537,7 @@ fn heat_color(level: u8) -> Color {
     }
 }
 
-fn build_hmap(activity: BTreeMap<NaiveDate, f64>) -> Vec<Vec<u8>> {
+fn build_hmap(activity: &BTreeMap<NaiveDate, f64>) -> Vec<Vec<u8>> {
     let mut grid = vec![vec![0u8; HMAPR]; HMAPC];
     let today = Local::now().date_naive();
     for i in 0..HMAPC {
@@ -544,7 +545,7 @@ fn build_hmap(activity: BTreeMap<NaiveDate, f64>) -> Vec<Vec<u8>> {
             let idx = i * HMAPR + j;
             let days_ago = (HMAPC * HMAPR - 1) - idx;
             let day = today - Duration::days(days_ago as i64);
-            let secs = activity.get(&day).cloned().unwrap_or(0.0);
+            let secs = activity.get(&day).copied().unwrap_or(0.0);
             let level = if secs == 0.0 {
                 0
             } else {
