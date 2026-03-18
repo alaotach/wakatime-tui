@@ -418,9 +418,11 @@ fn main() -> Result<(), io::Error> {
                     let h = (total_today / 3600.0) as u64;
                     let m = ((total_today % 3600.0) / 60.0) as u64;
                     let is_today = day_date == today;
+                    let max = day_hours.iter().cloned().fold(0./0., f64::max);
+                    let max_hr = day_hours.iter().position(|&h| h == max).unwrap_or(0);
                     let nav_text = format!(
-                        "[<-] [left]  {}  [right] [->]   |   Total: {}h {}m   |   [j] jump to date   |   [d/Esc] back",
-                        day_date.format("%A, %d %B %Y"), h, m, );
+                        "[<-] {} [->]   |   Total: {}h {}m   |   Max: {:.1}h   |   Most Productive: {}th Hour   |   [j] jump to date   |   [d/Esc] back",
+                        day_date.format("%A, %d %B %Y"), h, m, max / 3600.0, max_hr);
                     let nav = Paragraph::new(nav_text).block(
                         Block::default().borders(Borders::ALL).title(Span::styled(
                             if is_today { "Day View - Today" } else { "Day View" },
