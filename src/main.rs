@@ -133,7 +133,13 @@ fn main() -> Result<(), io::Error> {
                         Constraint::Min(0),
                     ]).split(size);
                     let search_brdrstyle = if search_active { Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) };
-                    let crsr = if search_active { "|" } else { "" };
+                    let crsr = if search_active { 
+                        if (chrono::Local::now().timestamp_millis() / 300) % 2 == 0 {
+                            "|"
+                        } else {
+                            " "
+                        }
+                     } else { "" };
                     let search_text = if search_q.is_empty() && !search_active {"/ to search, p back, q quit".to_string()} else { format!("{}{}", search_q, crsr) };
                     let search_style = if search_q.is_empty() && !search_active {
                         Style::default().fg(Color::DarkGray)
@@ -186,7 +192,7 @@ fn main() -> Result<(), io::Error> {
             }
         })?;
 
-        if event::poll(StdDuration::from_millis(100))? {
+        if event::poll(StdDuration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
                     continue;
