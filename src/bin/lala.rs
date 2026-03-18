@@ -1,7 +1,5 @@
 use reqwest::blocking::Client;
-use serde_json::Value;
 use std::error::Error;
-
 #[path = "../config.rs"]
 mod config;
 use config::Config;
@@ -9,10 +7,11 @@ use config::Config;
 fn main() -> Result<(), Box<dyn Error>> {
     let config = Config::from_env();
     let base = config.api_url.trim_end_matches('/');
-    let url = format!("{}/users/current/stats/last_7_days", base);
-    let api_key = &config.api_key;
-    let client = Client::new();
-    let resp = client.get(&url).bearer_auth(api_key).send()?;
+    let projects_url = format!(
+        "https://hackatime.hackclub.com/api/v1/authenticated/projects?include_archived=false"
+    );
+    
+    let resp = client.get(&projects_url).bearer_auth(&token).send()?;
     let status = resp.status();
     let body = resp.text()?;
 

@@ -1,34 +1,43 @@
+use std::collections::BTreeMap;
 use std::io;
+use std::time::Duration as StdDuration;
+
+use chrono::{Duration, Local, NaiveDate};
 use crossterm::{
-    event::{self, Event, KeyCode},
-    terminal::{disable_raw_mode, enable_raw_mode},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
+    terminal::{disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Gauge, Paragraph, Wrap},
     Frame, Terminal,
 };
-use std::time::Duration as StdDuration;
+
+use crate::api::wakatime::{
+    fetch_projects, fetch_spans, fetch_summary, fetch_weekly_stats, Item,
+    ProjectDetail as ProjectItem,
+};
 use crate::config::Config;
-mod config;
+
 mod api;
-use crate::api::wakatime::{fetch_summary, fetch_weekly_stats, fetch_spans, Item};
-use std::collections::BTreeMap;
-use chrono::{NaiveDate, Local, Datelike, Duration};
+mod config;
 
 const HMAPR: usize = 9;
 const HMAPC: usize = 40;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum View { Main, Projects }
+
+
 fn main() -> Result<(), io::Error> {
+    let mut view = View::Main;
+    let mut project_scroll: u16 = 0;
     let config = Config::from_env();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(io::Error::other)?;
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(io::Error::other)?;
 
     let (today_text, weekly_header, languages, projects) = if config.api_key.is_empty() {
         (
@@ -63,58 +72,114 @@ fn main() -> Result<(), io::Error> {
 
         (today_text, weekly_header, languages, projects)
     };
-
-    let activity = runtime.block_on(fetch_spans(&config)).unwrap_or_default();
-    let heatmap = build_hmap(activity);
-
+    let project_cards: Vec<ProjectItem> = if config.api_key.is_empty() {
+        vec![]
+    } else {
+        runtime.block_on(fetch_projects(&config)).unwrap_or_default()
+    };
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    let activity = runtime.block_on(fetch_spans(&config)).unwrap_or_default();
+    let heatmap = build_hmap(activity);
 
     loop {
         terminal.draw(|f| {
             let size = f.area();
-            let chunks = Layout::default().direction(Direction::Vertical).margin(1).constraints([
+
+            match view {
+                View::Main => {
+                    let chunks = Layout::default().direction(Direction::Vertical).margin(1).constraints([
                     Constraint::Length(3),
                     Constraint::Length(3),
                     Constraint::Length(9),
                     Constraint::Length(22),
                     Constraint::Min(0),
                 ]).split(size);
-            let header = Paragraph::new("WakaTime TUI - Press q to quit")
-                .block(Block::default().borders(Borders::ALL).title("Header"));
-            f.render_widget(header, chunks[0]);
+                    let header = Paragraph::new("WakaTime TUI - Press q to quit")
+                        .block(Block::default().borders(Borders::ALL).title("Header"));
+                    f.render_widget(header, chunks[0]);
 
-            let today = Paragraph::new(today_text.as_str())
-                .block(Block::default().borders(Borders::ALL).title("Today"));
-            f.render_widget(today, chunks[1]);
+                    let today = Paragraph::new(today_text.as_str())
+                        .block(Block::default().borders(Borders::ALL).title("Today"));
+                    f.render_widget(today, chunks[1]);
 
-            let weekly_block = Block::default().borders(Borders::ALL).title("This Week");
-            let weekly_inner = weekly_block.inner(chunks[2]);
-            f.render_widget(weekly_block, chunks[2]);
-            let weekly_layout = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(1),
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                    Constraint::Min(0),
-                ]).split(weekly_inner);
-            let weekly = Paragraph::new(weekly_header.as_str()).wrap(Wrap { trim: true });
-            f.render_widget(weekly, weekly_layout[0]);
-            rdr_gg(f, weekly_layout[1], &languages, Color::Green);
-            rdr_gg(f, weekly_layout[2], &projects, Color::Cyan);
-            let hmap_widget = Paragraph::new(rdr_hmap(&heatmap)).block(Block::default().borders(Borders::ALL).title("Coding Streak"));
+                    let weekly_block = Block::default().borders(Borders::ALL).title("This Week");
+                    let weekly_inner = weekly_block.inner(chunks[2]);
+                    f.render_widget(weekly_block, chunks[2]);
+                    let weekly_layout = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Length(1),
+                            Constraint::Length(3),
+                            Constraint::Length(3),
+                        ]).split(weekly_inner);
+                    let weekly = Paragraph::new(weekly_header.as_str()).wrap(Wrap { trim: true });
+                    f.render_widget(weekly, weekly_layout[0]);
+                    rdr_gg(f, weekly_layout[1], &languages, Color::Green);
+                    rdr_gg(f, weekly_layout[2], &projects, Color::Cyan);
+                    let hmap_widget = Paragraph::new(rdr_hmap(&heatmap)).block(Block::default().borders(Borders::ALL).title("Coding Streak"));
 
-            f.render_widget(hmap_widget, chunks[3]);
+                    f.render_widget(hmap_widget, chunks[3]);
+                }
+
+                View::Projects => {
+                    let container = Block::default()
+                        .borders(Borders::ALL)
+                        .title("My Projects | p back | up/down scroll");
+                    let inner = container.inner(size);
+                    f.render_widget(container, size);
+
+                    let tab = Style::default().fg(Color::Black).bg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD);
+
+                    let mut lines: Vec<Line> = vec![
+                        Line::from(vec![
+                            Span::styled(" Active ", tab),
+                        ]),
+                        Line::from(Span::styled(
+                            format!("{} projects", project_cards.iter().count()),
+                            Style::default().fg(Color::Rgb(201, 158, 170)),
+                        )),
+                        Line::from(""),
+                    ];
+
+                    for p in &project_cards {
+                        let h = p.total_seconds / 3600;
+                        let m = (p.total_seconds % 3600) / 60;
+                        let s = p.total_seconds % 60;
+                        let langs = if p.languages.is_empty() { "No languages".to_string() } else { p.languages.iter().take(4).cloned().collect::<Vec<_>>().join(", ") };
+                        lines.push(Line::from(Span::styled("────────────────────────────────────────────────────────", Style::default().fg(Color::Rgb(210, 57, 89)))));
+                        lines.push(Line::from(Span::styled(format!(" {}", p.name), Style::default().fg(Color::Rgb(245, 240, 243)).add_modifier(Modifier::BOLD))));
+                        lines.push(Line::from(Span::styled(format!(" {}h {}m {}s", h, m, s), Style::default().fg(Color::Rgb(233, 72, 103)).add_modifier(Modifier::BOLD))));
+                        lines.push(Line::from(Span::styled(format!(" {} heartbeats | {}", p.total_heartbeats, langs), Style::default().fg(Color::Rgb(173, 151, 160)))));
+                        lines.push(Line::from(""));
+                    }
+
+                    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((project_scroll, 0)), inner);
+                }
+            }
         })?;
 
         if event::poll(StdDuration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('q') {
-                    break;
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                match key.code {
+                    KeyCode::Char('q') => break,
+                    KeyCode::Char('p') if view == View::Main => {
+                        view = View::Projects;
+                    }
+                    KeyCode::Char('p') if view == View::Projects => {
+                        view = View::Main;
+                    }
+                    KeyCode::Down if view == View::Projects => { project_scroll = project_scroll.saturating_add(1); }
+                    KeyCode::Up if view == View::Projects => { project_scroll = project_scroll.saturating_sub(1); }
+                    KeyCode::PageDown if view == View::Projects => { project_scroll = project_scroll.saturating_add(8); }
+                    KeyCode::PageUp if view == View::Projects => { project_scroll = project_scroll.saturating_sub(8); }
+                    _ => {}
                 }
             }
         }

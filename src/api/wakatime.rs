@@ -78,6 +78,21 @@ pub struct Item {
     pub percent: f64,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct ProjectDetail {
+    pub name: String,
+    pub total_seconds: u64,
+    pub total_heartbeats: u64,
+    pub archived: bool,
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+ 
+#[derive(Deserialize)]
+struct ProjectsResponse {
+    projects: Vec<ProjectDetail>,
+}
+
 pub async fn get_username(config: &Config) -> Result<String, String> {
     if let Ok(username) = std::env::var("WAKATIME_USERNAME") {
         return Ok(username);
@@ -133,7 +148,6 @@ pub async fn fetch_spans(config: &Config) -> Result<BTreeMap<NaiveDate, f64>, St
     };
     let username = get_username(config).await?;
     let client = Client::new();
-    let base = config.api_url.trim_end_matches('/');
     let endpoint = format!("https://hackatime.hackclub.com/api/v1/users/{}/heartbeats/spans", username);
     let resp = client.get(&endpoint).bearer_auth(&config.api_key).send().await.map_err(|e| e.to_string())?;
     let body = resp.text().await.map_err(|e| e.to_string())?;
@@ -177,4 +191,25 @@ fn parse_spans_payload(raw: &str) -> Result<Vec<Span>, String> {
     } else {
         Err("unable to parse heartbeat spans payload".to_string())
     }
+}
+
+pub async fn fetch_projects(config: &Config) -> Result<Vec<ProjectDetail>, String> {
+    let username = get_username(config).await?;
+    let client = Client::new();
+    let endpoint = format!(
+        "https://hackatime.hackclub.com/api/v1/users/{}/projects/details?since=25-12-2007",
+        username
+    );
+    let resp = client
+        .get(&endpoint)
+        .bearer_auth(&config.api_key)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let parsed: ProjectsResponse = serde_json::from_str(&body)
+        .map_err(|e| format!("parse error: {}: {}", e, &body[..body.len().min(200)]))?;
+    let mut projects = parsed.projects;
+    projects.sort_by(|a, b| b.total_seconds.cmp(&a.total_seconds));
+    Ok(projects)
 }
