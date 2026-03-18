@@ -384,13 +384,10 @@ fn main() -> Result<(), io::Error> {
                     };
 
                     let lb_query = lb_search_q.to_lowercase();
-                    let fentries: Vec<&(String, String)> = if lb_search_q.is_empty() {
-                        entries.iter().collect()
+                    let fentries: Vec<(usize, &(String, String))> = if lb_search_q.is_empty() {
+                        entries.iter().enumerate().map(|(i, e)| (i + 1, e)).collect()
                     } else {
-                        entries
-                            .iter()
-                            .filter(|(u, _)| u.to_lowercase().contains(&lb_query))
-                            .collect()
+                        entries.iter().enumerate().filter(|(_, (u, _))| u.to_lowercase().contains(&lb_query)).map(|(i, e)| (i + 1, e)).collect()
                     };
 
                     let container = Block::default().borders(Borders::ALL).title(Span::styled(
@@ -416,8 +413,8 @@ fn main() -> Result<(), io::Error> {
                             Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
                         )));
                     } else {
-                        for (i, (username, time_text)) in fentries.iter().enumerate() {
-                            let rank = i + 1;
+                        for (visible_i, (rank, (username, time_text))) in fentries.iter().enumerate() {
+                            let rank = *rank;
                             let (medal, rank_style) = match rank {
                                 1 => ("\u{1F947}", Style::default().fg(Color::Rgb(255, 215, 0)).add_modifier(Modifier::BOLD)),
                                 2 => ("\u{1F948}", Style::default().fg(Color::Rgb(192, 192, 192)).add_modifier(Modifier::BOLD)),
@@ -435,7 +432,7 @@ fn main() -> Result<(), io::Error> {
                                 3 => Color::Rgb(130, 80, 30),
                                 _ => Color::Rgb(50, 50, 65),
                             };
-                            if rank > 1 {
+                            if visible_i > 0 {
                                 lines.push(Line::from(Span::styled(
                                     "─────────────────────────────────────────────────────────────",
                                     Style::default().fg(scolor),
