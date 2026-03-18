@@ -129,8 +129,26 @@ fn main() -> Result<(), io::Error> {
     let mut search_active = false;
     let mut lb_search_q = String::new();
     let mut lb_search_active = false;
+    let refresh_int = std::time::Duration::from_secs(300);
+    let mut last_r = std::time::Instant::now();
 
     loop {
+        if last_r.elapsed() >= refresh_int {
+            let (ntoday_text, nweekly_header, nlanguages, nprojects, nproject_cards, ndaily_lb, nweekly_lb, nheatmap, ncurrent_streak, nlongest_streak, nday_hours, ) = refresh(&runtime, &config, day_date);
+            today_text = ntoday_text;
+            weekly_header = nweekly_header;
+            languages = nlanguages;
+            projects = nprojects;
+            project_cards = nproject_cards;
+            daily_lb = ndaily_lb;
+            weekly_lb = nweekly_lb;
+            heatmap = nheatmap;
+            current_streak = ncurrent_streak;
+            longest_streak = nlongest_streak;
+            day_hours = nday_hours;
+            last_r = std::time::Instant::now();
+        }
+
         terminal.draw(|f| {
             let size = f.area();
 
@@ -618,7 +636,7 @@ fn main() -> Result<(), io::Error> {
                             day_hours = runtime.block_on(fetch_hourly(&config, day_date)).unwrap_or([0.0; 24]);
                         }
                     }
-                    KeyCode::Char('r') || KeyCode::Char('R') => {
+                    KeyCode::Char('r') | KeyCode::Char('R') => {
                         let (ntoday_text, nweekly_header, nlanguages, nprojects, nproject_cards, ndaily_lb, nweekly_lb, nheatmap, ncurrent_streak, nlongest_streak, nday_hours, ) = refresh(&runtime, &config, day_date);
                         today_text = ntoday_text;
                         weekly_header = nweekly_header;
@@ -631,6 +649,7 @@ fn main() -> Result<(), io::Error> {
                         current_streak = ncurrent_streak;
                         longest_streak = nlongest_streak;
                         day_hours = nday_hours;
+                        last_r = std::time::Instant::now();
                     }
                     _ => {}
                 }
