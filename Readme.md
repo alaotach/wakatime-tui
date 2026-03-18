@@ -5,14 +5,26 @@ A Terminal User Interface (TUI) for monitoring your coding activity stats from [
 ## Features
 
 ### Dashboard (Main View)
+<img width="1526" height="846" alt="image" src="https://github.com/user-attachments/assets/ee2667da-4fd3-46d5-99cf-0dac72d893cf" />
+
 
 ### Projects View
+<img width="1528" height="853" alt="image" src="https://github.com/user-attachments/assets/325e94ec-ddf1-4ac2-9230-1b4961996141" />
+
 
 ### Leaderboard View
+<img width="1491" height="836" alt="image" src="https://github.com/user-attachments/assets/483e8f06-4bf5-4042-b540-05ff6bed4495" />
+<img width="1510" height="846" alt="image" src="https://github.com/user-attachments/assets/76a14e35-5bf7-47eb-811e-0db6667f9485" />
+
+
 
 ### Day View
+<img width="1512" height="839" alt="image" src="https://github.com/user-attachments/assets/63e9eaf1-ff49-402c-83aa-de5b514030ba" />
+
 
 ### Setup & Onboarding
+<img width="1549" height="789" alt="image" src="https://github.com/user-attachments/assets/cbaa2c9b-7efe-4c55-83e7-d5c4c8173771" />
+
 
 ## Installation
 
