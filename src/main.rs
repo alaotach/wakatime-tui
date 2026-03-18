@@ -18,8 +18,8 @@ use ratatui::{
 };
 
 use crate::api::wakatime::{
-    fetch_projects, fetch_spans, fetch_summary, fetch_weekly_stats, Item,
-    ProjectDetail as ProjectItem,
+    fetch_daily_leaderboard, fetch_projects, fetch_spans, fetch_summary, fetch_weekly_leaderboard,
+    fetch_weekly_stats, Item, ProjectDetail as ProjectItem,
 };
 use crate::config::Config;
 
@@ -30,14 +30,29 @@ const HMAPR: usize = 9;
 const HMAPC: usize = 40;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum View { Main, Projects }
+enum View {
+    Main,
+    Projects,
+    Leaderboard,
+}
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LbType {
+    Daily,
+    Weekly,
+}
 
 fn main() -> Result<(), io::Error> {
     let mut view = View::Main;
     let mut project_scroll: u16 = 0;
+    let mut lb_scroll: u16 = 0;
+    let mut lb_period = LbType::Daily;
+
     let config = Config::from_env();
-    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(io::Error::other)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(io::Error::other)?;
 
     let (today_text, weekly_header, languages, projects) = if config.api_key.is_empty() {
         (
@@ -50,8 +65,7 @@ fn main() -> Result<(), io::Error> {
         let today_text = match runtime.block_on(fetch_summary(&config)) {
             Ok(summary) => format!(
                 "Today: {} ({}% completed)",
-                summary.data.grand_total.text,
-                summary.data.goal.completion_percent,
+                summary.data.grand_total.text, summary.data.goal.completion_percent,
             ),
             Err(e) => format!("API error: {}", e),
         };
@@ -72,11 +86,25 @@ fn main() -> Result<(), io::Error> {
 
         (today_text, weekly_header, languages, projects)
     };
+
     let project_cards: Vec<ProjectItem> = if config.api_key.is_empty() {
         vec![]
     } else {
         runtime.block_on(fetch_projects(&config)).unwrap_or_default()
     };
+
+    let daily_lb: Vec<(String, String)> = if config.api_key.is_empty() {
+        vec![]
+    } else {
+        runtime.block_on(fetch_daily_leaderboard(&config)).unwrap_or_default()
+    };
+
+    let weekly_lb: Vec<(String, String)> = if config.api_key.is_empty() {
+        vec![]
+    } else {
+        runtime.block_on(fetch_weekly_leaderboard(&config)).unwrap_or_default()
+    };
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
@@ -86,6 +114,8 @@ fn main() -> Result<(), io::Error> {
     let heatmap = build_hmap(activity);
     let mut search_q = String::new();
     let mut search_active = false;
+    let mut lb_search_q = String::new();
+    let mut lb_search_active = false;
 
     loop {
         terminal.draw(|f| {
@@ -93,14 +123,19 @@ fn main() -> Result<(), io::Error> {
 
             match view {
                 View::Main => {
-                    let chunks = Layout::default().direction(Direction::Vertical).margin(1).constraints([
-                    Constraint::Length(3),
-                    Constraint::Length(3),
-                    Constraint::Length(9),
-                    Constraint::Length(22),
-                    Constraint::Min(0),
-                ]).split(size);
-                    let header = Paragraph::new("WakaTime TUI - Press q to quit")
+                    let chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .margin(1)
+                        .constraints([
+                            Constraint::Length(3),
+                            Constraint::Length(3),
+                            Constraint::Length(9),
+                            Constraint::Length(22),
+                            Constraint::Min(0),
+                        ])
+                        .split(size);
+
+                    let header = Paragraph::new("WakaTime TUI - [p] Projects  [l] Leaderboard  [q] Quit")
                         .block(Block::default().borders(Borders::ALL).title("Header"));
                     f.render_widget(header, chunks[0]);
 
@@ -117,37 +152,46 @@ fn main() -> Result<(), io::Error> {
                             Constraint::Length(1),
                             Constraint::Length(3),
                             Constraint::Length(3),
-                        ]).split(weekly_inner);
+                        ])
+                        .split(weekly_inner);
                     let weekly = Paragraph::new(weekly_header.as_str()).wrap(Wrap { trim: true });
                     f.render_widget(weekly, weekly_layout[0]);
                     rdr_gg(f, weekly_layout[1], &languages, Color::Green);
                     rdr_gg(f, weekly_layout[2], &projects, Color::Cyan);
-                    let hmap_widget = Paragraph::new(rdr_hmap(&heatmap)).block(Block::default().borders(Borders::ALL).title("Coding Streak"));
 
+                    let hmap_widget = Paragraph::new(rdr_hmap(&heatmap))
+                        .block(Block::default().borders(Borders::ALL).title("Coding Streak"));
                     f.render_widget(hmap_widget, chunks[3]);
                 }
 
                 View::Projects => {
-                    let outer = Layout::default().direction(Direction::Vertical).constraints([
-                        Constraint::Length(3),
-                        Constraint::Min(0),
-                    ]).split(size);
-                    let search_brdrstyle = if search_active { Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) };
-                    let crsr = if search_active { 
-                        if (chrono::Local::now().timestamp_millis() / 300) % 2 == 0 {
-                            "|"
-                        } else {
-                            " "
-                        }
-                     } else { "" };
-                    let search_text = if search_q.is_empty() && !search_active {"/ to search, p back, q quit".to_string()} else { format!("{}{}", search_q, crsr) };
+                    let outer = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Length(3), Constraint::Min(0)])
+                        .split(size);
+
+                    let crsr = if search_active {
+                        if (chrono::Local::now().timestamp_millis() / 300) % 2 == 0 { "|" } else { " " }
+                    } else {
+                        ""
+                    };
+                    let search_text = if search_q.is_empty() && !search_active {
+                        "[/] to search, [p] back, [l] leaderboard, [q] quit".to_string()
+                    } else {
+                        format!("{}{}", search_q, crsr)
+                    };
                     let search_style = if search_q.is_empty() && !search_active {
                         Style::default().fg(Color::DarkGray)
                     } else {
                         Style::default().fg(Color::White)
                     };
-                    let search_bar = Paragraph::new(Span::styled(search_text, search_style)).block(Block::default().borders(Borders::ALL).title(Span::styled("Search Projects", Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD))));
+                    let search_bar = Paragraph::new(Span::styled(search_text, search_style))
+                        .block(Block::default().borders(Borders::ALL).title(Span::styled(
+                            "Search Projects",
+                            Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD),
+                        )));
                     f.render_widget(search_bar, outer[0]);
+
                     let filtered: Vec<&ProjectItem> = if search_q.is_empty() {
                         project_cards.iter().collect()
                     } else {
@@ -155,16 +199,16 @@ fn main() -> Result<(), io::Error> {
                     };
                     let container = Block::default()
                         .borders(Borders::ALL)
-                        .title(Span::styled(format!("My Projects ({}/{}) | p back | up/down scroll", filtered.len(), project_cards.len()), Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD)));
+                        .title(Span::styled(
+                            format!("My Projects ({}/{}) | [p] back | [up/down] scroll", filtered.len(), project_cards.len()),
+                            Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD),
+                        ));
                     let inner = container.inner(outer[1]);
                     f.render_widget(container, outer[1]);
 
                     let tab = Style::default().fg(Color::Black).bg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD);
-
                     let mut lines: Vec<Line> = vec![
-                        Line::from(vec![
-                            Span::styled(" Active ", tab),
-                        ]),
+                        Line::from(vec![Span::styled(" Active ", tab)]),
                         Line::from(Span::styled(
                             format!("{} projects", filtered.len()),
                             Style::default().fg(Color::Rgb(201, 158, 170)),
@@ -173,21 +217,179 @@ fn main() -> Result<(), io::Error> {
                     ];
 
                     if filtered.is_empty() {
-                        lines.push(Line::from(Span::styled("No projects found :(", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))));
+                        lines.push(Line::from(Span::styled(
+                            "No projects found :(",
+                            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                        )));
                     } else {
                         for p in &filtered {
                             let h = p.total_seconds / 3600;
                             let m = (p.total_seconds % 3600) / 60;
                             let s = p.total_seconds % 60;
-                            let langs = if p.languages.is_empty() { "No languages".to_string() } else { p.languages.iter().take(4).cloned().collect::<Vec<_>>().join(", ") };
-                            lines.push(Line::from(Span::styled("────────────────────────────────────────────────────────", Style::default().fg(Color::Rgb(210, 57, 89)))));
-                            lines.push(Line::from(Span::styled(format!(" {}", p.name), Style::default().fg(Color::Rgb(245, 240, 243)).add_modifier(Modifier::BOLD))));
-                            lines.push(Line::from(Span::styled(format!(" {}h {}m {}s", h, m, s), Style::default().fg(Color::Rgb(233, 72, 103)).add_modifier(Modifier::BOLD))));
-                            lines.push(Line::from(Span::styled(format!(" {} heartbeats | {}", p.total_heartbeats, langs), Style::default().fg(Color::Rgb(173, 151, 160)))));
+                            let langs = if p.languages.is_empty() {
+                                "No languages".to_string()
+                            } else {
+                                p.languages.iter().take(4).cloned().collect::<Vec<_>>().join(", ")
+                            };
+                            lines.push(Line::from(Span::styled(
+                                "────────────────────────────────────────────────────────",
+                                Style::default().fg(Color::Rgb(210, 57, 89)),
+                            )));
+                            lines.push(Line::from(Span::styled(
+                                format!(" {}", p.name),
+                                Style::default().fg(Color::Rgb(245, 240, 243)).add_modifier(Modifier::BOLD),
+                            )));
+                            lines.push(Line::from(Span::styled(
+                                format!(" {}h {}m {}s", h, m, s),
+                                Style::default().fg(Color::Rgb(233, 72, 103)).add_modifier(Modifier::BOLD),
+                            )));
+                            lines.push(Line::from(Span::styled(
+                                format!(" {} heartbeats | {}", p.total_heartbeats, langs),
+                                Style::default().fg(Color::Rgb(173, 151, 160)),
+                            )));
                             lines.push(Line::from(""));
                         }
                     }
-                    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((project_scroll, 0)), inner);
+
+                    f.render_widget(
+                        Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((project_scroll, 0)),
+                        inner,
+                    );
+                }
+
+                View::Leaderboard => {
+                    let outer = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Length(3), Constraint::Min(0)])
+                        .split(size);
+
+                    let crsr = if lb_search_active {
+                        if (chrono::Local::now().timestamp_millis() / 300) % 2 == 0 {
+                            "|"
+                        } else {
+                            " "
+                        }
+                    } else {
+                        ""
+                    };
+                    let lb_search_text = if lb_search_q.is_empty() && !lb_search_active {
+                        "[/] search username, [tab] switch, [p] projects, [l] main, [q] quit".to_string()
+                    } else {
+                        format!("{}{}", lb_search_q, crsr)
+                    };
+                    let dstyle = if lb_period == LbType::Daily {
+                        Style::default().fg(Color::Black).bg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+                    let wstyle = if lb_period == LbType::Weekly {
+                        Style::default().fg(Color::Black).bg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+
+                    let tab_line = Line::from(vec![
+                        Span::styled(" Daily ", dstyle),
+                        Span::raw("  "),
+                        Span::styled(" Weekly ", wstyle),
+                        Span::raw("  "),
+                        Span::styled(
+                            lb_search_text,
+                            if lb_search_q.is_empty() && !lb_search_active {
+                                Style::default().fg(Color::DarkGray)
+                            } else {
+                                Style::default().fg(Color::White)
+                            },
+                        ),
+                    ]);
+                    let tab_bar = Paragraph::new(tab_line).block(
+                        Block::default().borders(Borders::ALL).title(Span::styled(
+                            "Leaderboard",
+                            Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD),
+                        )),
+                    );
+                    f.render_widget(tab_bar, outer[0]);
+
+                    let entries = match lb_period {
+                        LbType::Daily => &daily_lb,
+                        LbType::Weekly => &weekly_lb,
+                    };
+
+                    let lb_query = lb_search_q.to_lowercase();
+                    let fentries: Vec<&(String, String)> = if lb_search_q.is_empty() {
+                        entries.iter().collect()
+                    } else {
+                        entries
+                            .iter()
+                            .filter(|(u, _)| u.to_lowercase().contains(&lb_query))
+                            .collect()
+                    };
+
+                    let container = Block::default().borders(Borders::ALL).title(Span::styled(
+                        format!(
+                            "{} | {}/{} entries",
+                            if lb_period == LbType::Daily { "Last 24 Hours" } else { "Last 7 Days" },
+                            fentries.len(),
+                            entries.len()
+                        ),
+                        Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD),
+                    ));
+                    let inner = container.inner(outer[1]);
+                    f.render_widget(container, outer[1]);
+
+                    let mut lines: Vec<Line> = Vec::new();
+                    if fentries.is_empty() {
+                        lines.push(Line::from(Span::styled(
+                            if lb_search_q.is_empty() {
+                                "  No leaderboard data."
+                            } else {
+                                "  No usernames match your search."
+                            },
+                            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                        )));
+                    } else {
+                        for (i, (username, time_text)) in fentries.iter().enumerate() {
+                            let rank = i + 1;
+                            let (medal, rank_style) = match rank {
+                                1 => ("\u{1F947}", Style::default().fg(Color::Rgb(255, 215, 0)).add_modifier(Modifier::BOLD)),
+                                2 => ("\u{1F948}", Style::default().fg(Color::Rgb(192, 192, 192)).add_modifier(Modifier::BOLD)),
+                                3 => ("\u{1F949}", Style::default().fg(Color::Rgb(205, 127, 50)).add_modifier(Modifier::BOLD)),
+                                _ => ("  ", Style::default().fg(Color::Rgb(100, 100, 120))),
+                            };
+                            let rank_text = if rank <= 3 {
+                                format!(" {} ", medal)
+                            } else {
+                                format!(" {:>3}. ", rank)
+                            };
+                            let scolor = match rank {
+                                1 => Color::Rgb(180, 130, 0),
+                                2 => Color::Rgb(120, 120, 120),
+                                3 => Color::Rgb(130, 80, 30),
+                                _ => Color::Rgb(50, 50, 65),
+                            };
+                            if rank > 1 {
+                                lines.push(Line::from(Span::styled(
+                                    "─────────────────────────────────────────────────────────────",
+                                    Style::default().fg(scolor),
+                                )));
+                            }
+                            lines.push(Line::from(vec![
+                                Span::styled(rank_text, rank_style),
+                                Span::styled(
+                                    format!("{:<35}", username),
+                                    if rank <= 3 { rank_style } else { Style::default().fg(Color::Rgb(220, 215, 230)) },
+                                ),
+                                Span::styled(
+                                    format!("{:>10}", time_text),
+                                    Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD),
+                                ),
+                            ]));
+                        }
+                    }
+                    f.render_widget(
+                        Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((lb_scroll, 0)),
+                        inner,
+                    );
                 }
             }
         })?;
@@ -202,13 +404,77 @@ fn main() -> Result<(), io::Error> {
                     KeyCode::Char('p') if view == View::Main => {
                         view = View::Projects;
                     }
-                    KeyCode::Char('p') if view == View::Projects => {
+                    KeyCode::Char('p') if view == View::Projects && !search_active => {
                         view = View::Main;
+                        search_active = false;
+                        search_q.clear();
                     }
-                    KeyCode::Down if view == View::Projects => { project_scroll = project_scroll.saturating_add(1); }
-                    KeyCode::Up if view == View::Projects => { project_scroll = project_scroll.saturating_sub(1); }
-                    KeyCode::PageDown if view == View::Projects => { project_scroll = project_scroll.saturating_add(8); }
-                    KeyCode::PageUp if view == View::Projects => { project_scroll = project_scroll.saturating_sub(8); }
+                    KeyCode::Char('l') if view == View::Leaderboard && !lb_search_active => {
+                        view = View::Main;
+                        lb_scroll = 0;
+                    }
+                    KeyCode::Char('l') if view == View::Main => {
+                        view = View::Leaderboard;
+                    }
+                    KeyCode::Char('l') if view == View::Projects && !search_active => {
+                        view = View::Leaderboard;
+                        search_active = false;
+                        search_q.clear();
+                    }
+                    KeyCode::Char('p') if view == View::Leaderboard && !lb_search_active => {
+                        view = View::Projects;
+                        lb_scroll = 0;
+                    }
+                    KeyCode::Tab if view == View::Leaderboard => {
+                        lb_period = match lb_period {
+                            LbType::Daily => LbType::Weekly,
+                            LbType::Weekly => LbType::Daily,
+                        };
+                        lb_scroll = 0;
+                    }
+                    KeyCode::Down if view == View::Leaderboard => {
+                        lb_scroll = lb_scroll.saturating_add(1);
+                    }
+                    KeyCode::Up if view == View::Leaderboard => {
+                        lb_scroll = lb_scroll.saturating_sub(1);
+                    }
+                    KeyCode::PageDown if view == View::Leaderboard => {
+                        lb_scroll = lb_scroll.saturating_add(10);
+                    }
+                    KeyCode::PageUp if view == View::Leaderboard => {
+                        lb_scroll = lb_scroll.saturating_sub(10);
+                    }
+                    KeyCode::Char('/') if view == View::Leaderboard => {
+                        lb_search_active = true;
+                    }
+                    KeyCode::Char(c) if view == View::Leaderboard && lb_search_active => {
+                        lb_search_q.push(c);
+                        lb_scroll = 0;
+                    }
+                    KeyCode::Backspace if view == View::Leaderboard && lb_search_active => {
+                        lb_search_q.pop();
+                        lb_scroll = 0;
+                    }
+                    KeyCode::Esc if view == View::Leaderboard => {
+                        lb_search_active = false;
+                        lb_search_q.clear();
+                        lb_scroll = 0;
+                    }
+                    KeyCode::Enter if view == View::Leaderboard && lb_search_active => {
+                        lb_search_active = false;
+                    }
+                    KeyCode::Down if view == View::Projects => {
+                        project_scroll = project_scroll.saturating_add(1);
+                    }
+                    KeyCode::Up if view == View::Projects => {
+                        project_scroll = project_scroll.saturating_sub(1);
+                    }
+                    KeyCode::PageDown if view == View::Projects => {
+                        project_scroll = project_scroll.saturating_add(8);
+                    }
+                    KeyCode::PageUp if view == View::Projects => {
+                        project_scroll = project_scroll.saturating_sub(8);
+                    }
                     KeyCode::Char('/') if view == View::Projects => {
                         search_active = true;
                     }
@@ -225,6 +491,9 @@ fn main() -> Result<(), io::Error> {
                         search_q.clear();
                     }
                     KeyCode::Enter if view == View::Projects && search_active => {
+                        search_active = false;
+                    }
+                    KeyCode::Enter if view == View::Leaderboard && search_active => {
                         search_active = false;
                     }
                     _ => {}
@@ -249,7 +518,6 @@ fn rdr_gg(f: &mut Frame, area: Rect, items: &[Item], color: Color) {
         constraints.push(Constraint::Ratio(1, n));
     }
     let chunks = Layout::default().direction(Direction::Horizontal).constraints(constraints).split(area);
-
     for i in 0..items.len() {
         let item = &items[i];
         let pct = item.percent.clamp(0.0, 100.0).round() as u16;
@@ -283,9 +551,9 @@ fn build_hmap(activity: BTreeMap<NaiveDate, f64>) -> Vec<Vec<u8>> {
                 let hrs = secs / 3600.0;
                 match hrs {
                     h if h < 0.25 => 1,
-                    h if h < 1.0  => 2,
-                    h if h < 3.0  => 3,
-                    _             => 4,
+                    h if h < 1.0 => 2,
+                    h if h < 3.0 => 3,
+                    _ => 4,
                 }
             };
             grid[i][j] = level;
@@ -300,7 +568,7 @@ fn rdr_hmap(grid: &[Vec<u8>]) -> Vec<Line<'static>> {
         let mut spans = Vec::with_capacity(grid.len() * 2);
         for col in 0..grid.len() {
             let level = grid[col][row];
-            spans.push(Span::styled("  ",Style::default().bg(heat_color(level))));
+            spans.push(Span::styled("  ", Style::default().bg(heat_color(level))));
             spans.push(Span::styled(" ", Style::default().fg(Color::Reset).bg(Color::Reset)));
         }
         lines.push(Line::from(spans));

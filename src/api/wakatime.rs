@@ -213,3 +213,31 @@ pub async fn fetch_projects(config: &Config) -> Result<Vec<ProjectDetail>, Strin
     projects.sort_by(|a, b| b.total_seconds.cmp(&a.total_seconds));
     Ok(projects)
 }
+
+pub async fn fetch_daily_leaderboard(config: &Config) -> Result<Vec<(String, String)>, String> {
+    let client = Client::new();
+    let base = config.api_url.trim_end_matches('/');
+    let endpoint = "https://hackatime.hackclub.com/api/v1/leaderboard/daily".to_string();
+    let resp = client.get(&endpoint).bearer_auth(&config.api_key).send().await.map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("parse error: {}: {}", e, &body[..body.len().min(200)]))?;
+    Ok(parsed.get("entries").and_then(|d| d.as_array()).unwrap_or(&vec![]).iter().map(|entry| {
+        let username = entry.get("user").and_then(|u| u.get("username")).and_then(|u| u.as_str()).unwrap_or("unknown").to_string();
+        let secs = entry.get("total_seconds").and_then(|s| s.as_u64()).unwrap_or(0);
+        (username, format!("{}h {}m {}s", secs / 3600, (secs % 3600) / 60, secs % 60))
+    }).collect())
+}
+
+pub async fn fetch_weekly_leaderboard(config: &Config) -> Result<Vec<(String, String)>, String> {
+    let client = Client::new();
+    let base = config.api_url.trim_end_matches('/');
+    let endpoint = "https://hackatime.hackclub.com/api/v1/leaderboard/weekly".to_string();
+    let resp = client.get(&endpoint).bearer_auth(&config.api_key).send().await.map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("parse error: {}: {}", e, &body[..body.len().min(200)]))?;
+    Ok(parsed.get("entries").and_then(|d| d.as_array()).unwrap_or(&vec![]).iter().map(|entry| {
+        let username = entry.get("user").and_then(|u| u.get("username")).and_then(|u| u.as_str()).unwrap_or("unknown").to_string();
+        let secs = entry.get("total_seconds").and_then(|s| s.as_u64()).unwrap_or(0);
+        (username, format!("{}h {}m {}s", secs / 3600, (secs % 3600) / 60, secs % 60))
+    }).collect())
+}
