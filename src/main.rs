@@ -637,19 +637,21 @@ fn main() -> Result<(), io::Error> {
                         }
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
-                        let (ntoday_text, nweekly_header, nlanguages, nprojects, nproject_cards, ndaily_lb, nweekly_lb, nheatmap, ncurrent_streak, nlongest_streak, nday_hours, ) = refresh(&runtime, &config, day_date);
-                        today_text = ntoday_text;
-                        weekly_header = nweekly_header;
-                        languages = nlanguages;
-                        projects = nprojects;
-                        project_cards = nproject_cards;
-                        daily_lb = ndaily_lb;
-                        weekly_lb = nweekly_lb;
-                        heatmap = nheatmap;
-                        current_streak = ncurrent_streak;
-                        longest_streak = nlongest_streak;
-                        day_hours = nday_hours;
-                        last_r = std::time::Instant::now();
+                        if last_r.elapsed() > std::time::Duration::from_secs(60) {
+                            let (ntoday_text, nweekly_header, nlanguages, nprojects, nproject_cards, ndaily_lb, nweekly_lb, nheatmap, ncurrent_streak, nlongest_streak, nday_hours, ) = refresh(&runtime, &config, day_date);
+                            today_text = ntoday_text;
+                            weekly_header = nweekly_header;
+                            languages = nlanguages;
+                            projects = nprojects;
+                            project_cards = nproject_cards;
+                            daily_lb = ndaily_lb;
+                            weekly_lb = nweekly_lb;
+                            heatmap = nheatmap;
+                            current_streak = ncurrent_streak;
+                            longest_streak = nlongest_streak;
+                            day_hours = nday_hours;
+                            last_r = std::time::Instant::now();
+                        }
                     }
                     _ => {}
                 }
