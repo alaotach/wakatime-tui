@@ -59,7 +59,7 @@ fn main() -> Result<(), io::Error> {
     let mut jump_input = String::new();
     let mut jump_err = String::new();
 
-    let (today_text, weekly_header, languages, projects) = if config.api_key.is_empty() {
+    let (mut today_text, mut weekly_header, mut languages, mut projects) = if config.api_key.is_empty() {
         (
             "Set HACKATIME_API_KEY in env to fetch coding stats".to_string(),
             String::new(),
@@ -92,19 +92,19 @@ fn main() -> Result<(), io::Error> {
         (today_text, weekly_header, languages, projects)
     };
 
-    let project_cards: Vec<ProjectItem> = if config.api_key.is_empty() {
+    let mut project_cards: Vec<ProjectItem> = if config.api_key.is_empty() {
         vec![]
     } else {
         runtime.block_on(fetch_projects(&config)).unwrap_or_default()
     };
 
-    let daily_lb: Vec<(String, String)> = if config.api_key.is_empty() {
+    let mut daily_lb: Vec<(String, String)> = if config.api_key.is_empty() {
         vec![]
     } else {
         runtime.block_on(fetch_daily_leaderboard(&config)).unwrap_or_default()
     };
 
-    let weekly_lb: Vec<(String, String)> = if config.api_key.is_empty() {
+    let mut weekly_lb: Vec<(String, String)> = if config.api_key.is_empty() {
         vec![]
     } else {
         runtime.block_on(fetch_weekly_leaderboard(&config)).unwrap_or_default()
@@ -116,8 +116,8 @@ fn main() -> Result<(), io::Error> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let activity = runtime.block_on(fetch_spans(&config)).unwrap_or_default();
-    let heatmap = build_hmap(&activity);
-    let (current_streak, longest_streak) = streaks(&activity);
+    let mut heatmap = build_hmap(&activity);
+    let (mut current_streak, mut longest_streak) = streaks(&activity);
     let mut day_hours: [f64; 24] = if config.api_key.is_empty() {
         [0.0; 24]
     } else {
@@ -148,7 +148,7 @@ fn main() -> Result<(), io::Error> {
                         ])
                         .split(size);
 
-                    let header = Paragraph::new("WakaTime TUI - [p] Projects  [l] Leaderboard  [d] Day  [q] Quit")
+                    let header = Paragraph::new("WakaTime TUI - [p] Projects  [l] Leaderboard  [d] Day  [r] Refresh  [q] Quit")
                         .block(Block::default().borders(Borders::ALL).title("Header"));
                     f.render_widget(header, chunks[0]);
 
@@ -618,6 +618,20 @@ fn main() -> Result<(), io::Error> {
                             day_hours = runtime.block_on(fetch_hourly(&config, day_date)).unwrap_or([0.0; 24]);
                         }
                     }
+                    KeyCode::Char('r') || KeyCode::Char('R') => {
+                        let (ntoday_text, nweekly_header, nlanguages, nprojects, nproject_cards, ndaily_lb, nweekly_lb, nheatmap, ncurrent_streak, nlongest_streak, nday_hours, ) = refresh(&runtime, &config, day_date);
+                        today_text = ntoday_text;
+                        weekly_header = nweekly_header;
+                        languages = nlanguages;
+                        projects = nprojects;
+                        project_cards = nproject_cards;
+                        daily_lb = ndaily_lb;
+                        weekly_lb = nweekly_lb;
+                        heatmap = nheatmap;
+                        current_streak = ncurrent_streak;
+                        longest_streak = nlongest_streak;
+                        day_hours = nday_hours;
+                    }
                     _ => {}
                 }
             }
@@ -788,4 +802,42 @@ fn rdr_day(f: &mut Frame, area: Rect, hours: &[f64; 24], is_today: bool) {
     }
     lines.push(Line::from(lspans));
     f.render_widget(Paragraph::new(lines), area);
+}
+
+fn refresh( runtime: &tokio::runtime::Runtime, config: &Config, day_date: NaiveDate, ) -> ( String, String, Vec<Item>, Vec<Item>, Vec<ProjectItem>, Vec<(String, String)>, Vec<(String, String)>, Vec<Vec<u8>>, u64, u64, [f64; 24], ) {
+    if config.api_key.is_empty() {
+        let activity = BTreeMap::new();
+        return ( "set 'HACKATIME_API_KEY' in env to fetch coding stats".to_string(), String::new(), vec![], vec![], vec![], vec![], vec![], build_hmap(&activity), 0, 0, [0.0; 24], );
+    }
+
+    let today_text = match runtime.block_on(fetch_summary(config)) {
+        Ok(summary) => format!(
+            "Today: {} ({}% completed)",
+            summary.data.grand_total.text, summary.data.goal.completion_percent,
+        ),
+        Err(e) => format!("{}", e),
+    };
+
+    let (weekly_header, languages, projects) = match runtime.block_on(fetch_weekly_stats(config)) {
+        Ok(stats) => (
+            format!(
+                "This week: {} ({})",
+                stats.data.human_readable_total, stats.data.human_readable_range,
+            ),
+            stats.data.languages.into_iter().take(8).collect::<Vec<_>>(),
+            stats.data.projects.into_iter().take(8).collect::<Vec<_>>(),
+        ),
+        Err(e) => (format!("{}", e), vec![], vec![]),
+    };
+
+    let pcards = runtime.block_on(fetch_projects(config)).unwrap_or_default();
+    let daily_lb = runtime.block_on(fetch_daily_leaderboard(config)).unwrap_or_default();
+    let weekly_lb = runtime.block_on(fetch_weekly_leaderboard(config)).unwrap_or_default();
+    let activity = runtime.block_on(fetch_spans(config)).unwrap_or_default();
+    let hmap = build_hmap(&activity);
+    let (cstreak, lstreak) = streaks(&activity);
+    let day_hours = runtime.block_on(fetch_hourly(config, day_date)).unwrap_or([0.0; 24]);
+
+    ( today_text, weekly_header, languages, projects, pcards, daily_lb, weekly_lb, hmap, cstreak, lstreak, day_hours,
+    )
 }
