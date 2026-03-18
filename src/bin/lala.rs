@@ -11,7 +11,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let client = Client::new();
     let projects_url = "https://hackatime.hackclub.com/api/v1/authenticated/projects?include_archived=false";
     
-    let resp = client.get(&projects_url).bearer_auth(&token).send()?;
+    let resp = client.get(projects_url).bearer_auth(&token).send()?;
     let status = resp.status();
     let body = resp.text()?;
 

@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use reqwest::Client;
 use crate::config::Config;
-use chrono::{Utc, TimeZone, NaiveDate, Local, Datelike};
+use chrono::{Utc, TimeZone, NaiveDate, Local, Datelike, Timelike};
 use std::{collections::BTreeMap, fs};
 use std::path::Path;
 
@@ -196,8 +196,7 @@ fn parse_spans_payload(raw: &str) -> Result<Vec<Span>, String> {
 pub async fn fetch_projects(config: &Config) -> Result<Vec<ProjectDetail>, String> {
     let username = get_username(config).await?;
     let client = Client::new();
-    let endpoint = format!(
-        "https://hackatime.hackclub.com/api/v1/users/{}/projects/details?since=25-12-2007",
+    let endpoint = format!( "https://hackatime.hackclub.com/api/v1/users/{}/projects/details?since=25-12-2007",
         username
     );
     let resp = client
@@ -281,4 +280,40 @@ pub fn streaks(activity: &BTreeMap<NaiveDate, f64>) -> (u64, u64) {
     }
     longest = longest.max(run);
     (current as u64, longest as u64)
+}
+
+pub async fn fetch_hourly(config: &Config, date: NaiveDate) -> Result<[f64; 24], String> {
+    let username = get_username(config).await?;
+    let client = Client::new();
+    let qstart = date - chrono::Duration::days(1);
+    let qend = date + chrono::Duration::days(1);
+    let endpoint = format!(
+        "https://hackatime.hackclub.com/api/v1/users/{}/heartbeats/spans?start_date={}&end_date={}", username, qstart.format("%d-%m-%Y"), qend.format("%d-%m-%Y")
+    );
+
+    let resp = client.get(&endpoint).bearer_auth(&config.api_key).send().await.map_err(|e| e.to_string())?;
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+    let spans = parse_spans_payload(&body)?;
+    let day_start = Local.with_ymd_and_hms(date.year(), date.month(), date.day(), 0, 0, 0).unwrap().timestamp() as f64;
+    let next_day = date + chrono::Duration::days(1);
+    let day_end = Local.with_ymd_and_hms(next_day.year(), next_day.month(), next_day.day(), 0, 0, 0).unwrap().timestamp() as f64;
+
+    let mut hours = [0f64; 24];
+    for s in spans {
+        let a = s.start.max(day_start);
+        let b = s.end.min(day_end);
+        if b <= a {
+            continue;
+        }
+        let mut cur = a;
+        while cur < b {
+            let dt = Local.timestamp_opt(cur as i64, 0).unwrap();
+            let hour = dt.hour() as usize;
+            let next_hr = Local.with_ymd_and_hms(dt.year(), dt.month(), dt.day(), hour as u32, 0, 0).unwrap().checked_add_signed(chrono::Duration::hours(1)).unwrap().timestamp() as f64;
+            let chunk_end = b.min(next_hr);
+            hours[hour] += chunk_end - cur;
+            cur = chunk_end;
+        }
+    }
+    Ok(hours)
 }

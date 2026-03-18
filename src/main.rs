@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::io;
 use std::time::Duration as StdDuration;
 
-use chrono::{Duration, Local, NaiveDate};
+use chrono::{Duration, Local, NaiveDate, Timelike};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
@@ -19,7 +19,7 @@ use ratatui::{
 
 use crate::api::wakatime::{
     fetch_daily_leaderboard, fetch_projects, fetch_spans, fetch_summary, fetch_weekly_leaderboard,
-    fetch_weekly_stats, streaks, Item, ProjectDetail as ProjectItem,
+    fetch_weekly_stats, fetch_hourly, streaks, Item, ProjectDetail as ProjectItem,
 };
 use crate::config::Config;
 
@@ -34,6 +34,7 @@ enum View {
     Main,
     Projects,
     Leaderboard,
+    Day,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +54,10 @@ fn main() -> Result<(), io::Error> {
         .enable_all()
         .build()
         .map_err(io::Error::other)?;
+    let mut day_date: NaiveDate = Local::now().date_naive();
+    let mut jump_active = false;
+    let mut jump_input = String::new();
+    let mut jump_err = String::new();
 
     let (today_text, weekly_header, languages, projects) = if config.api_key.is_empty() {
         (
@@ -113,6 +118,13 @@ fn main() -> Result<(), io::Error> {
     let activity = runtime.block_on(fetch_spans(&config)).unwrap_or_default();
     let heatmap = build_hmap(&activity);
     let (current_streak, longest_streak) = streaks(&activity);
+    let mut day_hours: [f64; 24] = if config.api_key.is_empty() {
+        [0.0; 24]
+    } else {
+        runtime
+            .block_on(fetch_hourly(&config, day_date))
+            .unwrap_or([0.0; 24])
+    };
     let mut search_q = String::new();
     let mut search_active = false;
     let mut lb_search_q = String::new();
@@ -136,7 +148,7 @@ fn main() -> Result<(), io::Error> {
                         ])
                         .split(size);
 
-                    let header = Paragraph::new("WakaTime TUI - [p] Projects  [l] Leaderboard  [q] Quit")
+                    let header = Paragraph::new("WakaTime TUI - [p] Projects  [l] Leaderboard  [d] Day  [q] Quit")
                         .block(Block::default().borders(Borders::ALL).title("Header"));
                     f.render_widget(header, chunks[0]);
 
@@ -392,6 +404,63 @@ fn main() -> Result<(), io::Error> {
                         inner,
                     );
                 }
+
+                View::Day => {
+                    let today = Local::now().date_naive();
+                    let chunks = Layout::default().direction(Direction::Vertical).margin(1)
+                        .constraints([
+                            Constraint::Length(3),
+                            Constraint::Length(3),
+                            Constraint::Min(0),
+                        ]).split(size);
+
+                    let total_today: f64 = day_hours.iter().sum();
+                    let h = (total_today / 3600.0) as u64;
+                    let m = ((total_today % 3600.0) / 60.0) as u64;
+                    let is_today = day_date == today;
+                    let nav_text = format!(
+                        "[<-] [left]  {}  [right] [->]   |   Total: {}h {}m   |   [j] jump to date   |   [d/Esc] back",
+                        day_date.format("%A, %d %B %Y"), h, m, );
+                    let nav = Paragraph::new(nav_text).block(
+                        Block::default().borders(Borders::ALL).title(Span::styled(
+                            if is_today { "Day View - Today" } else { "Day View" },
+                            Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD),
+                        )),
+                    );
+                    f.render_widget(nav, chunks[0]);
+                    let crsr = if jump_active {
+                        if (chrono::Local::now().timestamp_millis() / 300) % 2 == 0 {
+                            "|"
+                        } else {
+                            " "
+                        }
+                    } else {
+                        ""
+                    };
+                    let dsearch_text = if jump_active {
+                        format!("{}{}", jump_input, crsr)
+                    } else if !jump_err.is_empty() {
+                        jump_err.clone()
+                    } else {
+                        "Press [j],  type a date (YYYY-MM-DD) then press enter to jump".to_string()
+                    };
+                    let dsearch_style = if !jump_err.is_empty() {
+                        Style::default().fg(Color::Red)
+                    } else if jump_active {
+                        Style::default().fg(Color::White)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    };
+                    let dsearch_bar = Paragraph::new(Span::styled(dsearch_text, dsearch_style)).block(Block::default().borders(Borders::ALL).title("Search"));
+                    f.render_widget(dsearch_bar, chunks[1]);
+                    let block = Block::default().borders(Borders::ALL).title(Span::styled(
+                        "Coding Activity by Hour",
+                        Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD),
+                    ));
+                    let in_chart = block.inner(chunks[2]);
+                    f.render_widget(block, chunks[2]);
+                    rdr_day(f, in_chart, &day_hours, is_today);
+                }
             }
         })?;
 
@@ -494,8 +563,58 @@ fn main() -> Result<(), io::Error> {
                     KeyCode::Enter if view == View::Projects && search_active => {
                         search_active = false;
                     }
-                    KeyCode::Enter if view == View::Leaderboard && search_active => {
-                        search_active = false;
+                    KeyCode::Char('d') if view == View::Main => {
+                        view = View::Day;
+                    }
+                    KeyCode::Char('d') | KeyCode::Esc if view == View::Day && !jump_active => {
+                        view = View::Main;
+                    }
+                    KeyCode::Char('j') if view == View::Day && !jump_active => {
+                        jump_active = true;
+                        jump_input.clear();
+                        jump_err.clear();
+                    }
+                    KeyCode::Char(c) if view == View::Day && jump_active => {
+                        jump_input.push(c);
+                    }
+                    KeyCode::Backspace if view == View::Day && jump_active => {
+                        jump_input.pop();
+                        jump_err.clear();
+                    }
+                    KeyCode::Enter if view == View::Day && jump_active => {
+                        match NaiveDate::parse_from_str(jump_input.trim(), "%Y-%m-%d") {
+                            Ok(parsed) => {
+                                let today = Local::now().date_naive();
+                                if parsed <= today {
+                                    day_date = parsed;
+                                    day_hours = runtime.block_on(fetch_hourly(&config, day_date)).unwrap_or([0.0; 24]);
+                                    jump_active = false;
+                                    jump_input.clear();
+                                    jump_err.clear();
+                                } else {
+                                    jump_err = "Can't jump to a future date".to_string();
+                                }
+                            }
+                            Err(_) => {
+                                jump_err = "Invalid format. Use YYYY-MM-DD".to_string();
+                            }
+                        }
+                    }
+                    KeyCode::Esc if view == View::Day && jump_active => {
+                        jump_active = false;
+                        jump_input.clear();
+                        jump_err.clear();
+                    }
+                    KeyCode::Left if view == View::Day && !jump_active => {
+                        day_date = day_date - chrono::Duration::days(1);
+                        day_hours = runtime.block_on(fetch_hourly(&config, day_date)).unwrap_or([0.0; 24]);
+                    }
+                    KeyCode::Right if view == View::Day && !jump_active => {
+                        let today = Local::now().date_naive();
+                        if day_date < today {
+                            day_date = day_date + chrono::Duration::days(1);
+                            day_hours = runtime.block_on(fetch_hourly(&config, day_date)).unwrap_or([0.0; 24]);
+                        }
                     }
                     _ => {}
                 }
@@ -578,4 +697,93 @@ fn rdr_hmap(grid: &[Vec<u8>]) -> Vec<Line<'static>> {
         }
     }
     lines
+}
+
+fn rdr_day(f: &mut Frame, area: Rect, hours: &[f64; 24], is_today: bool) {
+    if area.height < 4 || area.width < 10 {
+        return;
+    }
+    let now_hour = Local::now().hour() as usize;
+    let max_secs = hours.iter().cloned().fold(0.0f64, f64::max).max(1.0);
+    let y_axis_w: u16 = 6;
+    let label_h: u16 = 1;
+    let chart_h = area.height.saturating_sub(label_h);
+    let chart_w = area.width.saturating_sub(y_axis_w);
+    let w = ((chart_w as usize) / 24).max(1) as u16;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for i in 0..chart_h {
+        let row_frac = 1.0 - (i as f64 / chart_h as f64);
+        let y_label = if i == 0 {
+            let m = (max_secs / 60.0) as u64;
+            if m >= 60 {
+                format!("{:>4}h  ", m / 60)
+            } else {
+                format!("{:>4}m  ", m)
+            }
+        } else if i == chart_h / 2 {
+            let m = (max_secs / 2.0 / 60.0) as u64;
+            if m >= 60 {
+                format!("{:>4}h  ", m / 60)
+            } else {
+                format!("{:>4}m  ", m)
+            }
+        } else if i == chart_h - 1 {
+            "   0   ".to_string()
+        } else {
+            "       ".to_string()
+        };
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        spans.push(Span::styled(
+            y_label,
+            Style::default().fg(Color::Rgb(100, 100, 120)),
+        ));
+
+        for h in 0..24 {
+            let frac = (hours[h] / max_secs).min(1.0);
+            let filled = frac >= row_frac;
+            let color = if filled {
+                if is_today && h == now_hour {
+                    Color::Rgb(255, 130, 160)
+                } else if hours[h] > 0.0 {
+                    let bb = (frac * 255.0) as u8;
+                    Color::Rgb(bb.max(80), 30, 70)
+                } else {
+                    Color::Rgb(40, 40, 55)
+                }
+            } else {
+                Color::Rgb(28, 28, 38)
+            };
+            let charr = if filled { "#" } else { "." };
+            let cell: String = charr.repeat(w as usize);
+            spans.push(Span::styled(cell, Style::default().fg(color)));
+            if w > 1 {
+                spans.push(Span::styled(" ", Style::default()));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+
+    let mut lspans: Vec<Span<'static>> = Vec::new();
+    lspans.push(Span::raw("       "));
+    for h in 0..24 {
+        let label = if w >= 2 {
+            format!("{:02}", h)
+        } else if h % 2 == 0 {
+            format!("{:02}", h)
+        } else {
+            "  ".to_string()
+        };
+        let style = if is_today && h == now_hour {
+            Style::default().fg(Color::Rgb(255, 130, 160)).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Rgb(100, 100, 120))
+        };
+        let padded = format!("{:<width$}", label, width = w as usize);
+        lspans.push(Span::styled(padded, style));
+        if w > 1 {
+            lspans.push(Span::raw(" "));
+        }
+    }
+    lines.push(Line::from(lspans));
+    f.render_widget(Paragraph::new(lines), area);
 }
