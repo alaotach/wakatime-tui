@@ -84,6 +84,8 @@ fn main() -> Result<(), io::Error> {
     let mut terminal = Terminal::new(backend)?;
     let activity = runtime.block_on(fetch_spans(&config)).unwrap_or_default();
     let heatmap = build_hmap(activity);
+    let mut search_q = String::new();
+    let mut search_active = false;
 
     loop {
         terminal.draw(|f| {
@@ -126,11 +128,30 @@ fn main() -> Result<(), io::Error> {
                 }
 
                 View::Projects => {
+                    let outer = Layout::default().direction(Direction::Vertical).constraints([
+                        Constraint::Length(3),
+                        Constraint::Min(0),
+                    ]).split(size);
+                    let search_brdrstyle = if search_active { Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::DarkGray) };
+                    let crsr = if search_active { "|" } else { "" };
+                    let search_text = if search_q.is_empty() && !search_active {"/ to search, p back, q quit".to_string()} else { format!("{}{}", search_q, crsr) };
+                    let search_style = if search_q.is_empty() && !search_active {
+                        Style::default().fg(Color::DarkGray)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    let search_bar = Paragraph::new(Span::styled(search_text, search_style)).block(Block::default().borders(Borders::ALL).title(Span::styled("Search Projects", Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD))));
+                    f.render_widget(search_bar, outer[0]);
+                    let filtered: Vec<&ProjectItem> = if search_q.is_empty() {
+                        project_cards.iter().collect()
+                    } else {
+                        project_cards.iter().filter(|p| p.name.to_lowercase().contains(&search_q.to_lowercase())).collect()
+                    };
                     let container = Block::default()
                         .borders(Borders::ALL)
-                        .title("My Projects | p back | up/down scroll");
-                    let inner = container.inner(size);
-                    f.render_widget(container, size);
+                        .title(Span::styled(format!("My Projects ({}/{}) | p back | up/down scroll", filtered.len(), project_cards.len()), Style::default().fg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD)));
+                    let inner = container.inner(outer[1]);
+                    f.render_widget(container, outer[1]);
 
                     let tab = Style::default().fg(Color::Black).bg(Color::Rgb(231, 76, 125)).add_modifier(Modifier::BOLD);
 
@@ -139,24 +160,27 @@ fn main() -> Result<(), io::Error> {
                             Span::styled(" Active ", tab),
                         ]),
                         Line::from(Span::styled(
-                            format!("{} projects", project_cards.iter().count()),
+                            format!("{} projects", filtered.len()),
                             Style::default().fg(Color::Rgb(201, 158, 170)),
                         )),
                         Line::from(""),
                     ];
 
-                    for p in &project_cards {
-                        let h = p.total_seconds / 3600;
-                        let m = (p.total_seconds % 3600) / 60;
-                        let s = p.total_seconds % 60;
-                        let langs = if p.languages.is_empty() { "No languages".to_string() } else { p.languages.iter().take(4).cloned().collect::<Vec<_>>().join(", ") };
-                        lines.push(Line::from(Span::styled("────────────────────────────────────────────────────────", Style::default().fg(Color::Rgb(210, 57, 89)))));
-                        lines.push(Line::from(Span::styled(format!(" {}", p.name), Style::default().fg(Color::Rgb(245, 240, 243)).add_modifier(Modifier::BOLD))));
-                        lines.push(Line::from(Span::styled(format!(" {}h {}m {}s", h, m, s), Style::default().fg(Color::Rgb(233, 72, 103)).add_modifier(Modifier::BOLD))));
-                        lines.push(Line::from(Span::styled(format!(" {} heartbeats | {}", p.total_heartbeats, langs), Style::default().fg(Color::Rgb(173, 151, 160)))));
-                        lines.push(Line::from(""));
+                    if filtered.is_empty() {
+                        lines.push(Line::from(Span::styled("No projects found :(", Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC))));
+                    } else {
+                        for p in &filtered {
+                            let h = p.total_seconds / 3600;
+                            let m = (p.total_seconds % 3600) / 60;
+                            let s = p.total_seconds % 60;
+                            let langs = if p.languages.is_empty() { "No languages".to_string() } else { p.languages.iter().take(4).cloned().collect::<Vec<_>>().join(", ") };
+                            lines.push(Line::from(Span::styled("────────────────────────────────────────────────────────", Style::default().fg(Color::Rgb(210, 57, 89)))));
+                            lines.push(Line::from(Span::styled(format!(" {}", p.name), Style::default().fg(Color::Rgb(245, 240, 243)).add_modifier(Modifier::BOLD))));
+                            lines.push(Line::from(Span::styled(format!(" {}h {}m {}s", h, m, s), Style::default().fg(Color::Rgb(233, 72, 103)).add_modifier(Modifier::BOLD))));
+                            lines.push(Line::from(Span::styled(format!(" {} heartbeats | {}", p.total_heartbeats, langs), Style::default().fg(Color::Rgb(173, 151, 160)))));
+                            lines.push(Line::from(""));
+                        }
                     }
-
                     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).scroll((project_scroll, 0)), inner);
                 }
             }
@@ -179,6 +203,24 @@ fn main() -> Result<(), io::Error> {
                     KeyCode::Up if view == View::Projects => { project_scroll = project_scroll.saturating_sub(1); }
                     KeyCode::PageDown if view == View::Projects => { project_scroll = project_scroll.saturating_add(8); }
                     KeyCode::PageUp if view == View::Projects => { project_scroll = project_scroll.saturating_sub(8); }
+                    KeyCode::Char('/') if view == View::Projects => {
+                        search_active = true;
+                    }
+                    KeyCode::Char(c) if view == View::Projects && search_active => {
+                        search_q.push(c);
+                        project_scroll = 0;
+                    }
+                    KeyCode::Backspace if view == View::Projects && search_active => {
+                        search_q.pop();
+                        project_scroll = 0;
+                    }
+                    KeyCode::Esc if view == View::Projects => {
+                        search_active = false;
+                        search_q.clear();
+                    }
+                    KeyCode::Enter if view == View::Projects && search_active => {
+                        search_active = false;
+                    }
                     _ => {}
                 }
             }
